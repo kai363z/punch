@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<!--
+  ============================================================
+  index.html — LIFF 打卡前端（放 GitHub Pages）
+  ============================================================
+  【使用前必改兩個地方】（在下方 <script> 最上面的 CONFIG）：
+    1. LIFF_ID  : 你的 LIFF ID
+    2. API_URL  : 你的 Apps Script 網頁應用程式網址（/exec 結尾）
+  ============================================================
+-->
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>員工打卡</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root{
+      --ink:#1a2433; --sub:#5b6878; --in:#1f9d6b; --out:#e2683c; --shadow:rgba(15,27,45,.16);
+    }
+    *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+    html,body{height:100%;}
+    body{
+      font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;
+      background:linear-gradient(160deg,#11203a 0%,#0f1b2d 60%,#0b1421 100%);
+      color:var(--ink);min-height:100vh;display:flex;flex-direction:column;
+    }
+    #dbg{background:#333;color:#fff;padding:8px 12px;text-align:center;font-size:12px;word-break:break-all;line-height:1.4;}
+    .wrap{flex:1;display:flex;flex-direction:column;padding:0 18px env(safe-area-inset-bottom);}
+    .top{padding:24px 4px 18px;color:#dce6f2;}
+    .greet{font-size:15px;opacity:.7;}
+    .name{font-size:26px;font-weight:700;margin-top:2px;}
+    .clock{font-size:46px;font-weight:300;margin-top:14px;font-variant-numeric:tabular-nums;}
+    .date{font-size:14px;opacity:.6;margin-top:2px;}
+    .card{background:#fff;border-radius:22px;padding:22px;margin-top:auto;margin-bottom:18px;box-shadow:0 12px 40px var(--shadow);}
+    .loc{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub);padding:10px 12px;background:#f5f8fb;border-radius:12px;margin-bottom:18px;min-height:42px;}
+    .loc .dot{width:9px;height:9px;border-radius:50%;background:#c2ccd8;flex:none;}
+    .loc.ok .dot{background:var(--in);}
+    .loc.warn .dot{background:var(--out);}
+    .btns{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+    .btn{border:none;border-radius:18px;padding:26px 10px;font-size:20px;font-weight:700;color:#fff;cursor:pointer;transition:transform .08s,opacity .2s;display:flex;flex-direction:column;align-items:center;gap:8px;}
+    .btn:active{transform:scale(.97);}
+    .btn:disabled{opacity:.5;}
+    .btn .ic{font-size:30px;line-height:1;}
+    .btn.in{background:linear-gradient(135deg,#22b07a,#1f9d6b);}
+    .btn.out{background:linear-gradient(135deg,#ed7a4f,#e2683c);}
+    .result{margin-top:16px;border-radius:14px;padding:14px 16px;font-size:15px;line-height:1.5;display:none;}
+    .result.show{display:block;}
+    .result.success{background:#e7f6ef;color:#136844;}
+    .result.warn{background:#fcefe9;color:#b54a23;}
+    .result.error{background:#fdecec;color:#c0392b;}
+    .hint{text-align:center;color:#8896a6;font-size:12px;margin-top:14px;}
+    .spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:middle;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+  </style>
+</head>
+<body>
+  <div id="dbg">啟動中…</div>
+  <div class="wrap">
+    <div class="top">
+      <div class="greet">您好</div>
+      <div class="name" id="empName">載入中…</div>
+      <div class="clock" id="clock">--:--</div>
+      <div class="date" id="date"></div>
+    </div>
+    <div class="card">
+      <div class="loc" id="loc"><span class="dot"></span><span id="locText">正在取得定位…</span></div>
+      <div class="btns">
+        <button class="btn in" id="btnIn" disabled><span class="ic">↓</span><span>上班打卡</span></button>
+        <button class="btn out" id="btnOut" disabled><span class="ic">↑</span><span>下班打卡</span></button>
+      </div>
+      <div class="result" id="result"></div>
+      <div class="hint">定位僅於打卡當下使用，不會持續追蹤</div>
+    </div>
+  </div>
+
+  <script>
+    // ============== 必改設定 ==============
+    var LIFF_ID = '2010204583-pF2c371C';                 // ← 你的 LIFF ID
+    var API_URL = 'https://script.google.com/macros/s/AKfycbxxnihiov29dl49HG1D4P9wq3CLZiAgq_dasjoMxOO51rgDTLd2ZTGKs0uTgiq3AA9v/exec';      // ← 你的 /exec 網址
+    // =====================================
+
+    var state = { userId:null, lat:null, lng:null, accuracy:null, busy:false };
+    function dbg(m){ var el=document.getElementById('dbg'); if(el) el.textContent=m; }
+
+    function tick(){
+      var d=new Date(), p=function(n){return (n<10?'0':'')+n;};
+      document.getElementById('clock').textContent=p(d.getHours())+':'+p(d.getMinutes());
+      var wk=['日','一','二','三','四','五','六'][d.getDay()];
+      document.getElementById('date').textContent=d.getFullYear()+'/'+p(d.getMonth()+1)+'/'+p(d.getDate())+'（'+wk+'）';
+    }
+    tick(); setInterval(tick,1000);
+
+    function showResult(type,text){ var el=document.getElementById('result'); el.className='result show '+type; el.innerHTML=text; }
+    function setLoc(cls,text){ document.getElementById('loc').className='loc '+cls; document.getElementById('locText').textContent=text; }
+    function enableButtons(on){ document.getElementById('btnIn').disabled=!on; document.getElementById('btnOut').disabled=!on; }
+    function isBound(){ var n=document.getElementById('empName').textContent; return n && n!=='載入中…' && n!=='尚未綁定' && n!=='初始化失敗'; }
+
+    // 用 fetch 呼叫 Apps Script API
+    function apiGet(params){
+      var qs = Object.keys(params).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(params[k]); }).join('&');
+      return fetch(API_URL + '?' + qs).then(function(r){ return r.json(); });
+    }
+
+    function getLocation(){
+      if(!navigator.geolocation){ setLoc('warn','此裝置不支援定位'); return; }
+      setLoc('','正在取得定位…');
+      navigator.geolocation.getCurrentPosition(function(pos){
+        state.lat=pos.coords.latitude; state.lng=pos.coords.longitude; state.accuracy=pos.coords.accuracy;
+        setLoc('ok','已取得定位（精度約 '+Math.round(pos.coords.accuracy)+' 公尺）');
+        if(state.userId && isBound()) enableButtons(true);
+      }, function(err){
+        var m='無法取得定位';
+        if(err.code===1) m='請允許定位權限後重新整理';
+        else if(err.code===3) m='定位逾時，請到收訊較好處再試';
+        setLoc('warn',m);
+      }, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
+    }
+
+    function punch(type){
+      if(state.busy) return;
+      if(state.lat===null){ showResult('error','尚未取得定位，請稍候或允許定位權限。'); return; }
+      state.busy=true; enableButtons(false);
+      var btn=document.getElementById(type==='上班'?'btnIn':'btnOut');
+      var orig=btn.innerHTML; btn.innerHTML='<span class="spinner"></span> 送出中';
+      apiGet({ action:'punch', userId:state.userId, type:type, lat:state.lat, lng:state.lng, accuracy:state.accuracy, device:navigator.userAgent })
+        .then(function(res){
+          btn.innerHTML=orig; state.busy=false; enableButtons(true);
+          if(res.ok){ showResult(res.message.indexOf('異常')>=0?'warn':'success', res.message); }
+          else { showResult('error', res.message); }
+        })
+        .catch(function(e){
+          btn.innerHTML=orig; state.busy=false; enableButtons(true);
+          showResult('error','送出失敗：'+(e&&e.message?e.message:e));
+        });
+    }
+    document.getElementById('btnIn').addEventListener('click',function(){ punch('上班'); });
+    document.getElementById('btnOut').addEventListener('click',function(){ punch('下班'); });
+
+    function showBindHelper(userId){
+      var el=document.getElementById('result'); el.className='result show warn';
+      el.innerHTML='尚未綁定您的帳號。請把下面這串 UserID 填入後台 Employee 表的「LINE_UserID」欄位：'+
+        '<div style="margin-top:10px;padding:10px 12px;background:#fff;border:1px dashed #b54a23;border-radius:10px;word-break:break-all;font-family:monospace;font-size:13px;color:#1a2433;">'+(userId||'(無法取得)')+'</div>'+
+        '<button id="copyUid" style="margin-top:10px;width:100%;padding:12px;border:none;border-radius:10px;background:#e2683c;color:#fff;font-size:15px;font-weight:700;">複製 UserID</button>';
+      var btn=document.getElementById('copyUid');
+      if(btn) btn.addEventListener('click',function(){
+        var text=userId||'';
+        if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(function(){ btn.textContent='已複製！'; }); }
+        else { var ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy'); btn.textContent='已複製！';}catch(e){} document.body.removeChild(ta); }
+      });
+    }
+
+    function queryEmployee(){
+      dbg('5. UserID='+state.userId+' → 查詢後端');
+      apiGet({ action:'getName', userId:state.userId })
+        .then(function(res){
+          dbg('6. 後端回應：name='+(res.name===null?'null(查無)':res.name));
+          if(res.ok && res.name){
+            document.getElementById('empName').textContent=res.name;
+            if(state.lat!==null) enableButtons(true);
+          } else {
+            document.getElementById('empName').textContent='尚未綁定';
+            showBindHelper(state.userId);
+          }
+        })
+        .catch(function(err){
+          dbg('6. 後端錯誤：'+(err&&err.message?err.message:err));
+          document.getElementById('empName').textContent='尚未綁定';
+          showBindHelper(state.userId);
+        });
+    }
+
+    function initLiff(){
+      var timedOut=false;
+      var guard=setTimeout(function(){
+        timedOut=true;
+        dbg('✗ liff.init 逾時（8秒）');
+        showResult('error','LINE 登入逾時，請重新開啟或聯絡管理員。');
+        document.getElementById('empName').textContent='初始化逾時';
+        getLocation();
+      },8000);
+
+      dbg('1. 準備初始化，LIFF_ID='+LIFF_ID);
+      if(typeof liff==='undefined'){ clearTimeout(guard); dbg('✗ liff SDK 未載入'); return; }
+
+      liff.init({ liffId: LIFF_ID }).then(function(){
+        if(timedOut) return; clearTimeout(guard);
+        dbg('2. liff.init 成功');
+        if(!liff.isLoggedIn()){ dbg('3. 尚未登入，導向登入…'); liff.login({ redirectUri: window.location.href }); return; }
+        dbg('4. 已登入，取得個人資料…');
+        liff.getProfile().then(function(profile){
+          state.userId=profile.userId;
+          queryEmployee(); getLocation();
+        }).catch(function(e){ dbg('✗ getProfile 錯誤：'+(e&&e.message?e.message:e)); getLocation(); });
+      }).catch(function(e){
+        if(timedOut) return; clearTimeout(guard);
+        dbg('✗ liff.init 失敗：'+(e&&e.message?e.message:e));
+        document.getElementById('empName').textContent='初始化失敗'; getLocation();
+      });
+    }
+    initLiff();
+  </script>
+</body>
+</html>
